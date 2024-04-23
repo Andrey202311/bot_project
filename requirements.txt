@@ -1,0 +1,6 @@
+python-telegram-bot==13.1
+pip==23.2.1
+python-telegram-bot==13.1
+requests==2.31.0
+translate==3.6.1
+googletrans==4.0.0rc1
