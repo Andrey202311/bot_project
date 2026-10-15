@@ -1,3 +1,291 @@
+
+
+
+
+
+
+# Вариант 3: уменьшенная CNN
+
+Вот полный ноутбук с уменьшенной моделью. Сохрани как `Lab2_neuro_bees_ants_small.ipynb`. Всё остальное (трансформации, загрузчики, train loop) оставляем как было — меняем **только класс модели**.
+
+---
+
+### Ячейка с моделью (замени `SimpleCNN` на `SmallCNN`)
+
+```python
+class SmallCNN(nn.Module):
+
+    def __init__(self):
+        super(SmallCNN, self).__init__()
+        # Было: 3 -> 32 -> 64 -> 128
+        # Стало: 3 -> 16 -> 32  (убрали третий блок)
+        self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
+        self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
+        self.pool  = nn.MaxPool2d(2)
+
+        # После двух pool: 96 -> 48 -> 24
+        # Было: 128*12*12 -> 256 -> 2
+        # Стало: 32*24*24 -> 128 -> 2
+        self.fc1 = nn.Linear(32*24*24, 128)
+        self.fc2 = nn.Linear(128, 2)
+        self.dropout = nn.Dropout(0.4)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))   # 96 -> 48
+        x = self.pool(F.relu(self.conv2(x)))   # 48 -> 24
+        x = x.view(-1, 32*24*24)
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
+
+simplenet = SmallCNN()
+print(simplenet)
+```
+
+---
+
+### Проверка числа параметров
+
+Добавь эту ячейку — увидишь, насколько модель стала легче:
+
+```python
+def count_params(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+print("Параметров в SmallCNN:", count_params(simplenet))
+```
+
+| Модель | Параметров |
+|---|---|
+| `SimpleCNN` (было) | ~4.8 млн |
+| `SmallCNN` (стало) | ~0.6 млн |
+
+В **8 раз меньше** — как раз под 245 картинок.
+
+---
+
+### Остальные ячейки — без изменений
+
+Всё остальное оставляешь как в предыдущем ноутбуке:
+
+```python
+optimizer = optim.Adam(simplenet.parameters(), lr=0.001, weight_decay=1e-4)
+loss_fn = nn.CrossEntropyLoss()
+
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
+simplenet.to(device)
+
+train(simplenet, optimizer, loss_fn, train_data_loader, val_data_loader, epochs=15, device=device)
+```
+
+---
+
+## 📊 Что ожидать
+
+С уменьшенной моделью картина должна измениться:
+
+| Метрика | SimpleCNN (было) | SmallCNN (ожидается) |
+|---|---|---|
+| Train Loss (конец) | 0.27 | ~0.35–0.45 |
+| Val Loss (конец) | 0.97 (растёт) | ~0.4–0.6 (падает) |
+| Accuracy | 0.69 | **0.80–0.88** |
+| Разрыв train/val | большой | маленький |
+
+Train loss будет **выше**, чем у большой модели — это нормально и хорошо. Модель больше не запоминает train, а учится обобщать.
+
+---
+
+## 🛠️ Если точности всё ещё мало — добавь BatchNorm
+
+BatchNorm стабилизирует обучение даже на маленьких моделях. Модифицируй `SmallCNN` так:
+
+```python
+class SmallCNN(nn.Module):
+
+    def __init__(self):
+        super(SmallCNN, self).__init__()
+        self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
+        self.bn1   = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
+        self.bn2   = nn.BatchNorm2d(32)
+        self.pool  = nn.MaxPool2d(2)
+
+        self.fc1 = nn.Linear(32*24*24, 128)
+        self.fc2 = nn.Linear(128, 2)
+        self.dropout = nn.Dropout(0.4)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.bn1(self.conv1(x))))
+        x = self.pool(F.relu(self.bn2(self.conv2(x))))
+        x = x.view(-1, 32*24*24)
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
+```
+
+BatchNorm обычно даёт **+3–5% accuracy** бесплатно.
+
+---
+
+## 🎯 Чек-лист «правильного» прогона
+
+1. **Train loss выше, чем у большой модели** — это OK, значит модель не переобучается.
+2. **Val loss должен падать до конца** (или почти до конца). Если снова начал расти — добавь early stopping.
+3. **Accuracy > 0.80** — уже хорошо для такой простой модели.
+4. **Разрыв train/val < 0.15** — модель обобщает.
+
+Если хочешь, могу ещё:
+- добавить **early stopping** (остановка, когда val loss перестал падать),
+- **сохранять лучшую модель** по val accuracy,
+- сделать **confusion matrix** на test.
+
+Скажи, что добавить — вставлю в ноутбук.# Вариант 3: уменьшенная CNN
+
+Вот полный ноутбук с уменьшенной моделью. Сохрани как `Lab2_neuro_bees_ants_small.ipynb`. Всё остальное (трансформации, загрузчики, train loop) оставляем как было — меняем **только класс модели**.
+
+---
+
+### Ячейка с моделью (замени `SimpleCNN` на `SmallCNN`)
+
+```python
+class SmallCNN(nn.Module):
+
+    def __init__(self):
+        super(SmallCNN, self).__init__()
+        # Было: 3 -> 32 -> 64 -> 128
+        # Стало: 3 -> 16 -> 32  (убрали третий блок)
+        self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
+        self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
+        self.pool  = nn.MaxPool2d(2)
+
+        # После двух pool: 96 -> 48 -> 24
+        # Было: 128*12*12 -> 256 -> 2
+        # Стало: 32*24*24 -> 128 -> 2
+        self.fc1 = nn.Linear(32*24*24, 128)
+        self.fc2 = nn.Linear(128, 2)
+        self.dropout = nn.Dropout(0.4)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))   # 96 -> 48
+        x = self.pool(F.relu(self.conv2(x)))   # 48 -> 24
+        x = x.view(-1, 32*24*24)
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
+
+simplenet = SmallCNN()
+print(simplenet)
+```
+
+---
+
+### Проверка числа параметров
+
+Добавь эту ячейку — увидишь, насколько модель стала легче:
+
+```python
+def count_params(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+print("Параметров в SmallCNN:", count_params(simplenet))
+```
+
+| Модель | Параметров |
+|---|---|
+| `SimpleCNN` (было) | ~4.8 млн |
+| `SmallCNN` (стало) | ~0.6 млн |
+
+В **8 раз меньше** — как раз под 245 картинок.
+
+---
+
+### Остальные ячейки — без изменений
+
+Всё остальное оставляешь как в предыдущем ноутбуке:
+
+```python
+optimizer = optim.Adam(simplenet.parameters(), lr=0.001, weight_decay=1e-4)
+loss_fn = nn.CrossEntropyLoss()
+
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
+simplenet.to(device)
+
+train(simplenet, optimizer, loss_fn, train_data_loader, val_data_loader, epochs=15, device=device)
+```
+
+---
+
+## 📊 Что ожидать
+
+С уменьшенной моделью картина должна измениться:
+
+| Метрика | SimpleCNN (было) | SmallCNN (ожидается) |
+|---|---|---|
+| Train Loss (конец) | 0.27 | ~0.35–0.45 |
+| Val Loss (конец) | 0.97 (растёт) | ~0.4–0.6 (падает) |
+| Accuracy | 0.69 | **0.80–0.88** |
+| Разрыв train/val | большой | маленький |
+
+Train loss будет **выше**, чем у большой модели — это нормально и хорошо. Модель больше не запоминает train, а учится обобщать.
+
+---
+
+## 🛠️ Если точности всё ещё мало — добавь BatchNorm
+
+BatchNorm стабилизирует обучение даже на маленьких моделях. Модифицируй `SmallCNN` так:
+
+```python
+class SmallCNN(nn.Module):
+
+    def __init__(self):
+        super(SmallCNN, self).__init__()
+        self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
+        self.bn1   = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
+        self.bn2   = nn.BatchNorm2d(32)
+        self.pool  = nn.MaxPool2d(2)
+
+        self.fc1 = nn.Linear(32*24*24, 128)
+        self.fc2 = nn.Linear(128, 2)
+        self.dropout = nn.Dropout(0.4)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.bn1(self.conv1(x))))
+        x = self.pool(F.relu(self.bn2(self.conv2(x))))
+        x = x.view(-1, 32*24*24)
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
+```
+
+BatchNorm обычно даёт **+3–5% accuracy** бесплатно.
+
+---
+
+## 🎯 Чек-лист «правильного» прогона
+
+1. **Train loss выше, чем у большой модели** — это OK, значит модель не переобучается.
+2. **Val loss должен падать до конца** (или почти до конца). Если снова начал расти — добавь early stopping.
+3. **Accuracy > 0.80** — уже хорошо для такой простой модели.
+4. **Разрыв train/val < 0.15** — модель обобщает.
+
+Если хочешь, могу ещё:
+- добавить **early stopping** (остановка, когда val loss перестал падать),
+- **сохранять лучшую модель** по val accuracy,
+- сделать **confusion matrix** на test.
+
+Скажи, что добавить — вставлю в ноутбук.
+
 # Да, это нормально, но есть проблема — переобучение
 
 Давай разберём, что видно по цифрам:
