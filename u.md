@@ -1,3 +1,316 @@
+# Lab2_neuro_bees_ants.ipynb
+
+Ниже — полный Jupyter Notebook по аналогии с твоим `Lab2_neuro.ipynb`, но для датасета **Hymenoptera (bees vs ants)**. Он сам скачает и распакует датасет, обучит CNN и покажет, как делать предсказания.
+
+---
+
+## Ячейка 1. Импорты
+
+```python
+import os
+import urllib.request
+import zipfile
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.utils.data
+import torch.nn.functional as F
+import torchvision
+from torchvision import transforms
+from PIL import Image, ImageFile
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+```
+
+---
+
+## Ячейка 2. Скачивание и распаковка датасета Hymenoptera
+
+```python
+DATA_URL = "https://download.pytorch.org/tutorial/hymenoptera_data.zip"
+DATA_DIR = "hymenoptera_data"
+
+if not os.path.exists(DATA_DIR):
+    print("Скачиваем датасет...")
+    urllib.request.urlretrieve(DATA_URL, "hymenoptera_data.zip")
+    with zipfile.ZipFile("hymenoptera_data.zip", "r") as z:
+        z.extractall(".")
+    print("Готово!")
+else:
+    print("Датасет уже скачан.")
+
+print("Классы:", os.listdir(os.path.join(DATA_DIR, "train")))
+```
+
+---
+
+## Ячейка 3. Функция проверки изображений
+
+```python
+def check_image(path):
+    try:
+        im = Image.open(path)
+        return True
+    except:
+        return False
+```
+
+---
+
+## Ячейка 4. Трансформации
+
+```python
+train_transforms = transforms.Compose([
+    transforms.Resize((96, 96)),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(10),
+    transforms.ColorJitter(0.1, 0.1, 0.1),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
+])
+
+val_transforms = transforms.Compose([
+    transforms.Resize((96, 96)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
+])
+```
+
+---
+
+## Ячейка 5. Загрузчики данных
+
+```python
+train_data_path = os.path.join(DATA_DIR, "train")
+val_data_path   = os.path.join(DATA_DIR, "val")
+
+train_data = torchvision.datasets.ImageFolder(
+    root=train_data_path, transform=train_transforms, is_valid_file=check_image)
+val_data = torchvision.datasets.ImageFolder(
+    root=val_data_path, transform=val_transforms, is_valid_file=check_image)
+
+print("Классы (алфавитный порядок):", train_data.classes)
+print("Train:", len(train_data), "| Val:", len(val_data))
+
+batch_size = 32
+train_data_loader = torch.utils.data.DataLoader(
+    train_data, batch_size=batch_size, shuffle=True, num_workers=2)
+val_data_loader = torch.utils.data.DataLoader(
+    val_data, batch_size=batch_size, shuffle=False, num_workers=2)
+```
+
+> **Важно:** `ImageFolder` присваивает метки в алфавитном порядке: `ants=0`, `bees=1`.
+
+---
+
+## Ячейка 6. Модель SimpleCNN
+
+```python
+class SimpleCNN(nn.Module):
+    def __init__(self):
+        super(SimpleCNN, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(3, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),   # 96 -> 48
+            nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),  # 48 -> 24
+            nn.Conv2d(64, 128, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2), # 24 -> 12
+        )
+        self.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(128 * 12 * 12, 256), nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(256, 2)
+        )
+
+    def forward(self, x):
+        return self.fc(self.conv(x))
+
+model = SimpleCNN()
+print(model)
+```
+
+---
+
+## Ячейка 7. Оптимизатор
+
+```python
+optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
+loss_fn = nn.CrossEntropyLoss()
+```
+
+---
+
+## Ячейка 8. Копирование модели на GPU
+
+```python
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
+
+model.to(device)
+print("Устройство:", device)
+```
+
+---
+
+## Ячейка 9. Функция обучения
+
+```python
+def train(model, optimizer, loss_fn, train_loader, val_loader, epochs=15, device="cpu"):
+    for epoch in range(1, epochs + 1):
+        # ---- train ----
+        model.train()
+        training_loss = 0.0
+        for inputs, targets in train_loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            optimizer.zero_grad()
+            output = model(inputs)
+            loss = loss_fn(output, targets)
+            loss.backward()
+            optimizer.step()
+            training_loss += loss.data.item() * inputs.size(0)
+        training_loss /= len(train_loader.dataset)
+
+        # ---- validation ----
+        model.eval()
+        valid_loss = 0.0
+        num_correct = 0
+        num_examples = 0
+        with torch.no_grad():
+            for inputs, targets in val_loader:
+                inputs, targets = inputs.to(device), targets.to(device)
+                output = model(inputs)
+                loss = loss_fn(output, targets)
+                valid_loss += loss.data.item() * inputs.size(0)
+                correct = torch.eq(torch.max(F.softmax(output, dim=1), dim=1)[1], targets)
+                num_correct += torch.sum(correct).item()
+                num_examples += correct.shape[0]
+        valid_loss /= len(val_loader.dataset)
+
+        print("Epoch: {}, Training Loss: {:.2f}, Validation Loss: {:.2f}, accuracy = {:.2f}".format(
+            epoch, training_loss, valid_loss, num_correct / num_examples))
+```
+
+---
+
+## Ячейка 10. Запуск обучения
+
+```python
+train(model, optimizer, loss_fn, train_data_loader, val_data_loader, epochs=15, device=device)
+```
+
+Ожидаемый результат: к 10–15 эпохе **accuracy ≈ 0.90–0.95**.
+
+---
+
+## Ячейка 11. Предсказание для одной картинки
+
+```python
+labels = ['ants', 'bees']
+
+# Возьмём случайную картинку из val
+sample_path = os.path.join(val_data_path, "bees", os.listdir(os.path.join(val_data_path, "bees"))[0])
+print("Файл:", sample_path)
+
+img = Image.open(sample_path).convert("RGB")
+img_tensor = val_transforms(img).to(device)
+img_tensor = torch.unsqueeze(img_tensor, 0)
+
+model.eval()
+with torch.no_grad():
+    prediction = F.softmax(model(img_tensor), dim=1)
+    predicted_class = prediction.argmax().item()
+
+print("Предсказание:", labels[predicted_class], "| Уверенность: {:.2f}".format(prediction[0][predicted_class].item()))
+```
+
+---
+
+## Ячейка 12. Сохранение и загрузка модели
+
+```python
+os.makedirs("tmp", exist_ok=True)
+torch.save(model.state_dict(), "tmp/simplecnn_bees_ants.pth")
+print("Модель сохранена.")
+
+# Загрузка
+model_loaded = SimpleCNN()
+model_loaded.load_state_dict(torch.load("tmp/simplecnn_bees_ants.pth", weights_only=True))
+model_loaded.to(device)
+model_loaded.eval()
+print("Модель загружена.")
+```
+
+---
+
+## Ячейка 13. Оценка на val целиком (опционально)
+
+```python
+model.eval()
+num_correct = 0
+num_total = 0
+with torch.no_grad():
+    for inputs, targets in val_data_loader:
+        inputs, targets = inputs.to(device), targets.to(device)
+        output = model(inputs)
+        preds = output.argmax(1)
+        num_correct += (preds == targets).sum().item()
+        num_total += targets.size(0)
+
+print("Итоговая точность на val: {:.3f}".format(num_correct / num_total))
+```
+
+---
+
+## 📊 Таблица параметров
+
+| Параметр | Где | Значение | Как влияет | Почему так |
+|---|---|---|---|---|
+| `Resize((96,96))` | `transforms` | 96×96 | ↑ размер → точнее, но медленнее | 96 — баланс для CPU/GPU |
+| `batch_size` | `DataLoader` | 32 | ↑ → стабильнее градиент, больше памяти | Хватает на 4–8 ГБ VRAM |
+| `lr` | `Adam` | 1e-3 | ↑ быстрее, но риск расходимости | Adam по умолчанию |
+| `weight_decay` | `Adam` | 1e-4 | Регуляризация | Малый L2 без потери скорости |
+| `epochs` | `train()` | 15 | Больше → точнее, но переобучение | CNN сходится за 10–20 эпох |
+| `Dropout(0.4)` | `fc` | 0.4 | ↑ → меньше переобучения | 0.3–0.5 — стандарт |
+| `RandomHorizontalFlip` | train tf | вкл | Аугментация | Пчёлы/муравьи зеркально симметричны |
+| `RandomRotation(10)` | train tf | 10° | ↑ разнообразие | Небольшой поворот реалистичен |
+| `ColorJitter(0.1,…)` | train tf | 0.1 | Устойчивость к свету | Не портит семантику |
+| `shuffle=True` | train loader | только train | Перемешивание → стабильный SGD | В val не нужно |
+| `num_workers` | `DataLoader` | 2 | Параллельная загрузка | Ускоряет обучение |
+| `CrossEntropyLoss` | loss | — | Классификация 2+ классов | Softmax + NLL внутри |
+| `model.train()/eval()` | цикл | — | Вкл/выкл Dropout | Без этого точность «прыгает» |
+| `torch.no_grad()` | eval | — | Отключает граф | Экономит память и время |
+
+---
+
+## 🚀 Чек-лист «правильного» обучения
+
+1. **Данные** — `train/ants`, `train/bees`, `val/ants`, `val/bees` (уже есть в ZIP).
+2. **Аугментация только на train** — иначе val станет «шумным».
+3. **Нормализация ImageNet** — обязательна для стабильности.
+4. **`model.train()` / `model.eval()`** — иначе Dropout работает неверно.
+5. **`optimizer.zero_grad()`** перед `backward()`.
+6. **Loss усредняем по датасету**, а не по батчу.
+7. **Метрика — accuracy на val**, а не train loss.
+8. **Ранняя остановка**: если val_loss не падает 3 эпохи — стоп.
+9. **Сохраняем `state_dict`**, не всю модель.
+10. **Тест — только после финальной настройки**.
+
+---
+
+Если хочешь, могу добавить:
+- **Transfer learning** с `resnet18` (точность >97% за 5 эпох),
+- **сохранение лучшей модели** по val accuracy,
+- **графики loss/accuracy** через matplotlib.
+
+Скажи — добавлю в этот же ноутбук.
+
+
+
+
+
 Ниже — готовая таблица для вставки в конец отчёта (после «Вывод» или вместо него, с последующим итоговым выводом) и короткий анализ.
 
 ---
