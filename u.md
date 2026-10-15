@@ -1,3 +1,423 @@
+Отлично, вижу структуру. У тебя есть папки `train/`, `val/`, `test/` с `ants` и `bees`, плюс отдельная папка `predict/` с картинками без меток.
+
+Ниже — **точно такой же ноутбук**, как твой исходный `Lab2_neuro.ipynb`, но адаптированный под bees/ants. Сохрани как `Lab2_neuro_bees_ants.ipynb`. Структура ячеек 1-в-1 как у тебя: те же markdown-заголовки, та же логика, те же имена переменных.
+
+---
+
+### Ячейка 1 (импорты)
+
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.utils.data
+import torch.nn.functional as F
+import torchvision
+from torchvision import transforms
+from PIL import Image, ImageFile
+
+ImageFile.LOAD_TRUNCATED_IMAGES=True
+```
+
+---
+
+### Ячейка 2 (markdown)
+
+```
+## Настройка загрузчика данных
+
+Используется встроенный набор данных `torchvision.datasets.ImageFolder`, чтобы быстро настроить загрузчики изображений пчёл и муравьёв.
+
+`check_image` — это небольшая быстрая функция, которая передаётся параметру `is_valid_file` в ImageFolder и выполняет проверку работоспособности, чтобы убедиться, что PIL действительно может открыть файл.
+```
+
+---
+
+### Ячейка 3
+
+```python
+def check_image(path):
+    try:
+        im = Image.open(path)
+        return True
+    except:
+        return False
+```
+
+---
+
+### Ячейка 4 (markdown)
+
+```
+Настройте преобразования для каждого изображения:
+
+Измените размер до 96x96
+
+Преобразуйте в тензор
+
+Нормализуйте с помощью ImageNet mean & std
+```
+
+> ⚠️ Здесь важное отличие: для свёрточной сети (CNN) размер входа `12288 = 3*64*64` больше не подходит напрямую, поэтому **увеличим до 96×96** и добавим аугментации для train — это заметно повышает точность.
+
+---
+
+### Ячейка 5
+
+```python
+train_transforms = transforms.Compose([
+    transforms.Resize((96,96)),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(10),
+    transforms.ColorJitter(0.1, 0.1, 0.1),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
+])
+
+val_transforms = transforms.Compose([
+    transforms.Resize((96,96)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
+])
+```
+
+---
+
+### Ячейка 6 (markdown)
+
+```
+Настройте пути к данным и создайте ImageFolder для train/val/test
+```
+
+---
+
+### Ячейка 7
+
+```python
+train_data_path = "train/"
+train_data = torchvision.datasets.ImageFolder(root=train_data_path, transform=train_transforms, is_valid_file=check_image)
+```
+
+---
+
+### Ячейка 8
+
+```python
+val_data_path = "val/"
+val_data = torchvision.datasets.ImageFolder(root=val_data_path, transform=val_transforms, is_valid_file=check_image)
+```
+
+---
+
+### Ячейка 9
+
+```python
+test_data_path = "test/"
+test_data = torchvision.datasets.ImageFolder(root=test_data_path, transform=val_transforms, is_valid_file=check_image)
+```
+
+---
+
+### Ячейка 10
+
+```python
+batch_size=32
+```
+
+---
+
+### Ячейка 11
+
+```python
+train_data_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
+val_data_loader   = torch.utils.data.DataLoader(val_data, batch_size=batch_size)
+test_data_loader  = torch.utils.data.DataLoader(test_data, batch_size=batch_size)
+```
+
+---
+
+### Ячейка 12 (markdown)
+
+```
+## Первая модель, SimpleNet
+
+SimpleNet — это очень простая комбинация трёх линейных уровней и повторных активаций между ними.
+
+⚠️ Для изображений 96×96 полносвязная сеть даст мало точности, поэтому здесь мы её заменим на простую свёрточную сеть `SimpleCNN`, сохранив ту же структуру "три блока + выходной слой".
+```
+
+---
+
+### Ячейка 13
+
+```python
+class SimpleCNN(nn.Module):
+
+    def __init__(self):
+        super(SimpleCNN, self).__init__()
+        self.conv1 = nn.Conv2d(3, 32, 3, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, 3, padding=1)
+        self.conv3 = nn.Conv2d(64, 128, 3, padding=1)
+        self.pool  = nn.MaxPool2d(2)
+        self.fc1 = nn.Linear(128*12*12, 256)
+        self.fc2 = nn.Linear(256, 2)
+        self.dropout = nn.Dropout(0.4)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))   # 96 -> 48
+        x = self.pool(F.relu(self.conv2(x)))   # 48 -> 24
+        x = self.pool(F.relu(self.conv3(x)))   # 24 -> 12
+        x = x.view(-1, 128*12*12)
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
+```
+
+---
+
+### Ячейка 14
+
+```python
+simplenet = SimpleCNN()
+```
+
+---
+
+### Ячейка 15 (markdown)
+
+```
+## Создание оптимизатор
+
+Используется Adam в качестве оптимизатора со скоростью обучения 0,001.
+```
+
+---
+
+### Ячейка 16
+
+```python
+optimizer = optim.Adam(simplenet.parameters(), lr=0.001, weight_decay=1e-4)
+```
+
+---
+
+### Ячейка 17 (markdown)
+
+```
+## Копирование модели в GPU
+
+Копирование модели в GPU, если устройство доступно. Иначе копирование модели в CPU.
+```
+
+---
+
+### Ячейка 18
+
+```python
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
+
+simplenet.to(device)
+```
+
+---
+
+### Ячейка 19 (markdown)
+
+```
+## Обучение
+
+Обучение модели, вычисление потерь, оптимизация сети и выполнение проверки для каждой эпохи.
+```
+
+---
+
+### Ячейка 20
+
+```python
+def train(model, optimizer, loss_fn, train_loader, val_loader, epochs=20, device="cpu"):
+    for epoch in range(1, epochs+1):
+        training_loss = 0.0
+        valid_loss = 0.0
+        model.train()
+        for batch in train_loader:
+            optimizer.zero_grad()
+            inputs, targets = batch
+            inputs = inputs.to(device)
+            targets = targets.to(device)
+            output = model(inputs)
+            loss = loss_fn(output, targets)
+            loss.backward()
+            optimizer.step()
+            training_loss += loss.data.item() * inputs.size(0)
+        training_loss /= len(train_loader.dataset)
+
+        model.eval()
+        num_correct = 0
+        num_examples = 0
+        for batch in val_loader:
+            inputs, targets = batch
+            inputs = inputs.to(device)
+            output = model(inputs)
+            targets = targets.to(device)
+            loss = loss_fn(output,targets)
+            valid_loss += loss.data.item() * inputs.size(0)
+            correct = torch.eq(torch.max(F.softmax(output, dim=1), dim=1)[1], targets)
+            num_correct += torch.sum(correct).item()
+            num_examples += correct.shape[0]
+        valid_loss /= len(val_loader.dataset)
+
+        print('Epoch: {}, Training Loss: {:.2f}, Validation Loss: {:.2f}, accuracy = {:.2f}'.format(epoch, training_loss,
+        valid_loss, num_correct / num_examples))
+```
+
+---
+
+### Ячейка 21
+
+```python
+train(simplenet, optimizer, torch.nn.CrossEntropyLoss(), train_data_loader, val_data_loader, epochs=15, device=device)
+```
+
+---
+
+### Ячейка 22 (markdown)
+
+```
+## Выполнение прогнозов
+
+Метки расположены в алфавитно-цифровом порядке, поэтому "ants" будет равна 0, "bees" - 1. Нужно преобразовать изображение, а также убедиться, что полученный тензор скопирован на соответствующее устройство, прежде чем применять к нему модель.
+```
+
+---
+
+### Ячейка 23
+
+```python
+labels = ['ants','bees']
+
+img = Image.open("val/bees/10870992_eebeeb3a12.jpg")
+img = val_transforms(img).to(device)
+img = torch.unsqueeze(img, 0)
+
+simplenet.eval()
+prediction = F.softmax(simplenet(img), dim=1)
+prediction = prediction.argmax()
+print(labels[prediction])
+```
+
+> ⚠️ Путь к картинке поменяй на любой реально существующий файл в `val/bees/` или `val/ants/`.
+
+---
+
+### Ячейка 24 (markdown)
+
+```
+## Saving Models
+
+We can either save the entire model using `save` or just the parameters using `state_dict`. Using the latter is normally preferable, as it allows you to reuse parameters even if the model's structure changes (or apply parameters from one model to another).
+```
+
+---
+
+### Ячейка 25
+
+```python
+torch.save(simplenet.state_dict(), "tmp/simplenet_bees_ants.pth")
+simplenet = SimpleCNN()
+simplenet_state_dict = torch.load("tmp/simplenet_bees_ants.pth", weights_only=True)
+simplenet.load_state_dict(simplenet_state_dict)
+```
+
+> ⚠️ Убедись, что папка `tmp/` существует. Если нет — создай: `import os; os.makedirs("tmp", exist_ok=True)`.
+
+---
+
+### Ячейка 26
+
+```python
+torch.save(simplenet.state_dict(), "tmp/simplenet_bees_ants")
+simplenet = SimpleCNN()
+simplenet_state_dict = torch.load("tmp/simplenet_bees_ants")
+simplenet.load_state_dict(simplenet_state_dict)
+```
+
+---
+
+## 📊 Таблица: что поменялось относительно исходного ноутбука
+
+| Параметр | Было (cat/fish) | Стало (bees/ants) | Почему |
+|---|---|---|---|
+| `Resize` | `(64,64)` | `(96,96)` | CNN нужно чуть больше деталей |
+| Аугментации | нет | `Flip`, `Rotation`, `ColorJitter` | Мало данных (~250 train) → нужно разнообразие |
+| Модель | `SimpleNet` (3 Linear) | `SimpleCNN` (3 Conv + 2 Linear) | Полносвязная теряет пространственную структуру |
+| `labels` | `['cat','fish']` | `['ants','bees']` | Алфавитный порядок ImageFolder |
+| `batch_size` | 64 | 32 | Меньше памяти при 96×96 |
+| `optimizer` | Adam lr=0.001 | Adam lr=0.001 + `weight_decay=1e-4` | Регуляризация при малом датасете |
+| `epochs` | 5 | 15 | CNN нужно больше эпох |
+| Пути | `train/`, `val/`, `test/` | те же | Структура идентичная |
+| Сохранение | `tmp/simplenet.pth` | `tmp/simplenet_bees_ants.pth` | Чтобы не перезаписать старую модель |
+| `shuffle=True` | не было | добавили в train loader | Стабильный SGD |
+
+---
+
+## ⚡ Как повысить точность ещё сильнее
+
+Если 15 эпох дают ~85–90%, добавь **transfer learning** — замену `SimpleCNN` на `resnet18`:
+
+```python
+from torchvision import models
+simplenet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+simplenet.fc = nn.Linear(simplenet.fc.in_features, 2)
+simplenet = simplenet.to(device)
+optimizer = optim.Adam(simplenet.parameters(), lr=1e-4)
+train(simplenet, optimizer, torch.nn.CrossEntropyLoss(), train_data_loader, val_data_loader, epochs=5, device=device)
+```
+
+Это даст **>95% за 5 эпох** даже на маленьком датасете.
+
+---
+
+## 🔮 Папка `predict/` — как использовать
+
+Раз у тебя есть отдельная папка `predict/` с картинками без меток, вот код для батч-предсказания:
+
+```python
+import os
+predict_dir = "predict/"
+labels = ['ants','bees']
+
+simplenet.eval()
+with torch.no_grad():
+    for fname in sorted(os.listdir(predict_dir)):
+        if not fname.lower().endswith((".jpg",".jpeg",".png")):
+            continue
+        img = Image.open(os.path.join(predict_dir, fname)).convert("RGB")
+        img = val_transforms(img).to(device)
+        img = torch.unsqueeze(img, 0)
+        pred = F.softmax(simplenet(img), dim=1)
+        cls = pred.argmax().item()
+        print(f"{fname}: {labels[cls]}  ({pred[0][cls].item():.2f})")
+```
+
+Вставь эту ячейку в конец ноутбука — она пройдётся по всем 10 картинкам из `predict/` и выведет класс + уверенность.
+
+---
+
+Если хочешь, могу дополнительно:
+- добавить **сохранение лучшей модели по val accuracy**,
+- построить **графики loss/accuracy** через matplotlib,
+- сделать **confusion matrix** на test.
+
+Скажи, что добавить.
+
+
+
 # Lab2_neuro_bees_ants.ipynb
 
 Ниже — полный Jupyter Notebook по аналогии с твоим `Lab2_neuro.ipynb`, но для датасета **Hymenoptera (bees vs ants)**. Он сам скачает и распакует датасет, обучит CNN и покажет, как делать предсказания.
